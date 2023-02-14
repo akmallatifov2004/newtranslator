@@ -1,30 +1,46 @@
+from flask import Flask, request
+
 import telebot
 from telebot import types
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from deep_translator import GoogleTranslator#, DeepL
 from gtts import gTTS
+from PIL import Image
+import pytesseract
 
 import time, os
 
+secret = "1234"
+TOKEN = "1234"
+bot = telebot.TeleBot(TOKEN, threaded=False)
+bot.remove_webhook()
+bot.set_webhook(url="https://username.pythonanywhere.com/{}".format(secret))
 
-TOKEN = '2071725128:AAEw2m0CkwbTy70vN7DGT0pwMNugiQvJe8U'
-#tester '946339179:AAHLxm2yVJ8aQLBVFK24nDdX-OmP76rFwW4'
-#main '2071725128:AAEw2m0CkwbTy70vN7DGT0pwMNugiQvJe8U'
-bot = telebot.TeleBot(TOKEN)
+
+app = Flask(__name__)
+
+@app.route('/{}'.format(secret), methods=["POST"])
+def telegram_webhook():
+    req = request.stream.read().decode('utf-8')
+    bot.process_new_updates([telebot.types.Update.de_json(req)])
+    return "200"
+
 
 class msgtexts:
     greeting = '''
-<b>Отправьте любой текст</b>
+<b>Отправьте любой текст на любом языке</b>
+<b>Или отправьте фото с английским текстом</b>
 
 <i>для дополнительной информации нажмите </i> /info
 '''
     info = '''
 • Перевод текста (язык текста определяется автоматически)
+• Перевод текста из фото (пока распознаёт только английский)
 • Озвучка переведенного текста
 • Инлайн режим
 
-<b>сервер:</b> <code>Heroku</code>
+<b>сервер:</b> <code>pythonanywhere</code>
 <b>язык:</b> <code>Python</code>
 <b>API:</b> <code>Google Translate</code>
 
@@ -44,12 +60,14 @@ def command_info(message):
 
 @bot.message_handler(commands=['showusers'])
 def command_showusers(message):
-    global users, users_firstname
-    text = '\n'
-    for id in users:
-	    text += (f'<a href="tg://user?id={id}">{users_firstname[id]}</a>; ')
-    pass
-    bot.send_message(message.chat.id, text, parse_mode='html')
+    try:
+        global users, users_firstname
+        text = ''
+        for id in users:
+    	    text += (f'<a href="tg://user?id={id}">{users_firstname[id]}</a>; ')
+        bot.send_message(message.chat.id, text, parse_mode='html')
+    except Exception as e:
+        bot.send_message(message.chat.id, e, parse_mode='html')
 
 @bot.message_handler(content_types=['text'])
 def getuserstext(message):
@@ -79,7 +97,7 @@ def getuserstext(message):
 
 
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("Перевести на: Русский,", callback_data="ru"))
+    markup.add(InlineKeyboardButton("Русский / Russian", callback_data="ru"))
     markup.add(InlineKeyboardButton("Английский / English", callback_data="en"))
     markup.add(InlineKeyboardButton("Французский / Français", callback_data="fr"))
     markup.add(InlineKeyboardButton("Немецкий / Deutsch", callback_data="de"))
@@ -87,12 +105,49 @@ def getuserstext(message):
     markup.add(InlineKeyboardButton("Турецкий / Türk", callback_data="tr"))
     markup.add(InlineKeyboardButton("Арабский / عرب", callback_data="ar"))
 
-    bot.reply_to(message, message.text, reply_markup=markup)
+    text = f'<code>{message.text}</code>'
+    bot.reply_to(message, text, reply_markup=markup, parse_mode='html')
+
+@bot.message_handler(content_types=['photo'])
+def photo_translate(message):
+    try:
+        bot.send_message(message.chat.id, f'<b>загрузка 🔄</b>', parse_mode='html')
+
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        file_name = (f'img_tt_{message.chat.id}_{int(time.time())}.jpg')
+
+        with open(file_name, 'wb') as new_file:
+            new_file.write(downloaded_file)
+
+        pytesseract.pytesseract.tesseract_cmd = r"/usr/bin/tesseract"
+        text = pytesseract.image_to_string(Image.open(file_name))
+
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Русский / Russian", callback_data="ru"))
+        markup.add(InlineKeyboardButton("Английский / English", callback_data="en"))
+        markup.add(InlineKeyboardButton("Французский / Français", callback_data="fr"))
+        markup.add(InlineKeyboardButton("Немецкий / Deutsch", callback_data="de"))
+        markup.add(InlineKeyboardButton("Корейский / 한국인", callback_data="ko"))
+        markup.add(InlineKeyboardButton("Турецкий / Türk", callback_data="tr"))
+        markup.add(InlineKeyboardButton("Арабский / عرب", callback_data="ar"))
+
+        text = f'<code>{str(text)}</code>'
+        bot.reply_to(message, text, reply_markup=markup, parse_mode='html')
+
+        try:
+            os.remove(file_name)
+        except:
+            pass
+
+    except Exception as photo_translate_error:
+        bot.reply_to(message, '⚠️ ошибка')
+        print('photo_translate_error: ', photo_translate_error)
 
 def translatetext(message, language):
     try:
         translated = GoogleTranslator(source='auto', target=language).translate(message.text)
-        bot.send_message(message.chat.id, translated)
+        bot.send_message(message.chat.id, f'<code>{translated}</code>', parse_mode='html')
         ttstext(message, translated, language)
         return translated
     except Exception as e:
@@ -107,7 +162,7 @@ def ttstext(message, sentence, lng):
         speech.save(filename)
 
         with open(filename, 'rb') as audio:
-            bot.send_audio(message.chat.id, audio)
+            bot.send_voice(message.chat.id, audio)
 
         try:
             os.remove(filename)
@@ -229,4 +284,4 @@ def query_text(query):
         print(e)
 
 print("bot has been started")
-bot.polling(none_stop=True)
+# bot.polling(none_stop=True)
